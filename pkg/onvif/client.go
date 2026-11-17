@@ -5,9 +5,11 @@ import (
 	"errors"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -95,6 +97,20 @@ func (c *Client) GetURI() (string, error) {
 
 	if u.User == nil && c.url.User != nil {
 		u.User = c.url.User
+	}
+
+	// Some cameras return a private RTSP address even when their ONVIF endpoint
+	// is reached through port forwarding. In that case, use the ONVIF host and
+	// the explicitly configured external RTSP port.
+	if u.Scheme == "rtsp" {
+		if forwardedPort := query.Get("rtsp_forwarded_port"); forwardedPort != "" {
+			port, err := strconv.Atoi(forwardedPort)
+			if err != nil || port < 1 || port > 65535 {
+				return "", errors.New("onvif: invalid rtsp_forwarded_port")
+			}
+
+			u.Host = net.JoinHostPort(c.url.Hostname(), forwardedPort)
+		}
 	}
 
 	return u.String(), nil

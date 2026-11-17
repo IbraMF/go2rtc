@@ -15,6 +15,17 @@ streams:
   tapo1: onvif://admin:password@192.168.1.123:2020
 ```
 
+### Forwarded RTSP ports
+
+When a remote camera's ONVIF and RTSP ports are forwarded through a router, the
+camera may still report its private RTSP address. Set `rtsp_forwarded_port` to
+replace that address with the ONVIF host and the external RTSP port:
+
+```yaml
+streams:
+  remote: onvif://admin:password@camera.example.com:8080?rtsp_forwarded_port=8554
+```
+
 ## PTZ controls
 
 Open `stream.html?src=dahua1&ptz=1` to show pan, tilt and zoom controls without
