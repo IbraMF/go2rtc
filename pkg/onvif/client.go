@@ -17,12 +17,20 @@ const PathDevice = "/onvif/device_service"
 type Client struct {
 	url *url.URL
 
-	deviceURL string
-	mediaURL  string
-	imaginURL string
+	deviceURL  string
+	mediaURL   string
+	imaginURL  string
+	ptzURL     string
+	hasZoom    bool
+	httpClient *http.Client
 }
 
 func NewClient(rawURL string) (*Client, error) {
+	return NewClientWithTimeout(rawURL, 5000*time.Second)
+}
+
+// NewClientWithTimeout bounds each request, including service discovery.
+func NewClientWithTimeout(rawURL string, timeout time.Duration) (*Client, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -30,7 +38,7 @@ func NewClient(rawURL string) (*Client, error) {
 
 	baseURL := "http://" + u.Host
 
-	client := &Client{url: u}
+	client := &Client{url: u, httpClient: &http.Client{Timeout: timeout}}
 	client.deviceURL = baseURL + GetPath(u.Path, PathDevice)
 
 	b, err := client.DeviceRequest(DeviceGetCapabilities)
@@ -43,6 +51,9 @@ func NewClient(rawURL string) (*Client, error) {
 
 	s = FindTagValue(b, "Imaging.+?XAddr")
 	client.imaginURL = baseURL + GetPath(s, "/onvif/imaging_service")
+
+	s = FindTagValue(b, "PTZ.+?XAddr")
+	client.ptzURL = baseURL + GetPath(s, "/onvif/ptz_service")
 
 	return client, nil
 }
@@ -106,13 +117,14 @@ func (c *Client) GetProfilesTokens() ([]string, error) {
 
 	var tokens []string
 
-	re := regexp.MustCompile(`Profiles.+?token="([^"]+)`)
-	for _, s := range re.FindAllStringSubmatch(string(b), 10) {
+	for _, s := range profileTokens.FindAllStringSubmatch(string(b), -1) {
 		tokens = append(tokens, s[1])
 	}
 
 	return tokens, nil
 }
+
+var profileTokens = regexp.MustCompile(`(?s)Profiles\b[^>]*\btoken="([^"]+)`)
 
 func (c *Client) HasSnapshots() bool {
 	b, err := c.GetServiceCapabilities()
@@ -182,16 +194,25 @@ func (c *Client) Request(url, body string) ([]byte, error) {
 	e := NewEnvelopeWithUser(c.url.User)
 	e.Append(body)
 
-	client := &http.Client{Timeout: time.Second * 5000}
-	res, err := client.Post(url, `application/soap+xml;charset=utf-8`, bytes.NewReader(e.Bytes()))
+	res, err := c.httpClient.Post(url, `application/soap+xml;charset=utf-8`, bytes.NewReader(e.Bytes()))
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
 
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Contains(b, []byte(":Fault")) || bytes.Contains(b, []byte("<Fault")) {
+		fault := FindTagValue(b, "Fault.+?Text")
+		if fault == "" {
+			fault = "SOAP fault"
+		}
+		return nil, errors.New("onvif: " + fault)
+	}
 	if res.StatusCode != http.StatusOK {
 		return nil, errors.New("onvif: wrong response " + res.Status)
 	}
-
-	return io.ReadAll(res.Body)
+	return b, nil
 }
